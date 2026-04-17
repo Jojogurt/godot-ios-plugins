@@ -76,6 +76,11 @@ void GameCenter::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("show_game_center"), &GameCenter::show_game_center);
 	ClassDB::bind_method(D_METHOD("request_identity_verification_signature"), &GameCenter::request_identity_verification_signature);
 
+	ClassDB::bind_method(D_METHOD("save_game", "params"), &GameCenter::save_game);
+	ClassDB::bind_method(D_METHOD("fetch_saved_games"), &GameCenter::fetch_saved_games);
+	ClassDB::bind_method(D_METHOD("load_saved_game", "params"), &GameCenter::load_saved_game);
+	ClassDB::bind_method(D_METHOD("resolve_conflicting_saved_games", "params"), &GameCenter::resolve_conflicting_saved_games);
+
 	ClassDB::bind_method(D_METHOD("get_pending_event_count"), &GameCenter::get_pending_event_count);
 	ClassDB::bind_method(D_METHOD("pop_pending_event"), &GameCenter::pop_pending_event);
 };
@@ -434,6 +439,181 @@ Variant GameCenter::pop_pending_event() {
 
 	return front;
 };
+
+Error GameCenter::save_game(Dictionary p_params) {
+	ERR_FAIL_COND_V(!p_params.has("name"), ERR_INVALID_PARAMETER);
+	ERR_FAIL_COND_V(!p_params.has("data"), ERR_INVALID_PARAMETER);
+
+	NSString *name = [NSString stringWithCString:((String)p_params["name"]).utf8().get_data() encoding:NSUTF8StringEncoding];
+	PackedByteArray bytes = p_params["data"];
+	NSData *data = [NSData dataWithBytes:bytes.ptr() length:bytes.size()];
+
+	[[GKLocalPlayer localPlayer] saveGameData:data withName:name completionHandler:^(GKSavedGame *savedGame, NSError *error) {
+		Dictionary ret;
+		ret["type"] = "save_game";
+		if (error == nil && savedGame != nil) {
+			ret["result"] = "ok";
+			ret["name"] = String::utf8([savedGame.name UTF8String]);
+		} else {
+			ret["result"] = "error";
+			if (error != nil) {
+				ret["error_code"] = (int64_t)error.code;
+				ret["error_description"] = String::utf8([[error localizedDescription] UTF8String]);
+			}
+		}
+		pending_events.push_back(ret);
+	}];
+	return OK;
+}
+
+Error GameCenter::fetch_saved_games() {
+	[[GKLocalPlayer localPlayer] fetchSavedGamesWithCompletionHandler:^(NSArray<GKSavedGame *> *savedGames, NSError *error) {
+		Dictionary ret;
+		ret["type"] = "fetch_saved_games";
+		if (error == nil) {
+			ret["result"] = "ok";
+			Array games;
+			for (GKSavedGame *g in savedGames) {
+				Dictionary gd;
+				gd["name"] = String::utf8([g.name UTF8String]);
+				gd["device"] = String::utf8([g.deviceName UTF8String]);
+				gd["modified_ts"] = (int64_t)[g.modificationDate timeIntervalSince1970];
+				games.push_back(gd);
+			}
+			ret["games"] = games;
+		} else {
+			ret["result"] = "error";
+			ret["error_code"] = (int64_t)error.code;
+			ret["error_description"] = String::utf8([[error localizedDescription] UTF8String]);
+		}
+		pending_events.push_back(ret);
+	}];
+	return OK;
+}
+
+Error GameCenter::load_saved_game(Dictionary p_params) {
+	ERR_FAIL_COND_V(!p_params.has("name"), ERR_INVALID_PARAMETER);
+	NSString *target_name = [NSString stringWithCString:((String)p_params["name"]).utf8().get_data() encoding:NSUTF8StringEncoding];
+
+	[[GKLocalPlayer localPlayer] fetchSavedGamesWithCompletionHandler:^(NSArray<GKSavedGame *> *savedGames, NSError *error) {
+		if (error != nil) {
+			Dictionary ret;
+			ret["type"] = "load_saved_game";
+			ret["result"] = "error";
+			ret["name"] = String::utf8([target_name UTF8String]);
+			ret["error_code"] = (int64_t)error.code;
+			pending_events.push_back(ret);
+			return;
+		}
+		NSMutableArray<GKSavedGame *> *matching = [NSMutableArray array];
+		for (GKSavedGame *g in savedGames) {
+			if ([g.name isEqualToString:target_name]) {
+				[matching addObject:g];
+			}
+		}
+		if (matching.count == 0) {
+			Dictionary ret;
+			ret["type"] = "load_saved_game";
+			ret["result"] = "not_found";
+			ret["name"] = String::utf8([target_name UTF8String]);
+			pending_events.push_back(ret);
+			return;
+		}
+		if (matching.count > 1) {
+			// Surface conflict BEFORE loading — caller must merge and call resolve_conflicting_saved_games.
+			__block int remaining = (int)matching.count;
+			__block Array loaded_versions;
+			for (GKSavedGame *g in matching) {
+				GKSavedGame *g_ref = g;
+				[g loadDataWithCompletionHandler:^(NSData *data, NSError *load_err) {
+					Dictionary v;
+					v["name"] = String::utf8([g_ref.name UTF8String]);
+					v["device"] = String::utf8([g_ref.deviceName UTF8String]);
+					v["modified_ts"] = (int64_t)[g_ref.modificationDate timeIntervalSince1970];
+					if (load_err == nil && data != nil) {
+						PackedByteArray pba;
+						pba.resize((int)data.length);
+						memcpy(pba.ptrw(), data.bytes, data.length);
+						v["data"] = pba;
+					} else {
+						v["data"] = PackedByteArray();
+					}
+					loaded_versions.push_back(v);
+					remaining--;
+					if (remaining == 0) {
+						Dictionary final_ret;
+						final_ret["type"] = "saved_games_conflict";
+						final_ret["name"] = String::utf8([target_name UTF8String]);
+						final_ret["versions"] = loaded_versions;
+						pending_events.push_back(final_ret);
+					}
+				}];
+			}
+			return;
+		}
+		// Single match — load it.
+		GKSavedGame *only = matching[0];
+		[only loadDataWithCompletionHandler:^(NSData *data, NSError *load_err) {
+			Dictionary ret;
+			ret["type"] = "load_saved_game";
+			ret["name"] = String::utf8([only.name UTF8String]);
+			if (load_err == nil && data != nil) {
+				ret["result"] = "ok";
+				PackedByteArray pba;
+				pba.resize((int)data.length);
+				memcpy(pba.ptrw(), data.bytes, data.length);
+				ret["data"] = pba;
+				ret["device"] = String::utf8([only.deviceName UTF8String]);
+				ret["modified_ts"] = (int64_t)[only.modificationDate timeIntervalSince1970];
+			} else {
+				ret["result"] = "error";
+				if (load_err != nil) {
+					ret["error_code"] = (int64_t)load_err.code;
+				}
+			}
+			pending_events.push_back(ret);
+		}];
+	}];
+	return OK;
+}
+
+Error GameCenter::resolve_conflicting_saved_games(Dictionary p_params) {
+	ERR_FAIL_COND_V(!p_params.has("name"), ERR_INVALID_PARAMETER);
+	ERR_FAIL_COND_V(!p_params.has("data"), ERR_INVALID_PARAMETER);
+
+	NSString *target_name = [NSString stringWithCString:((String)p_params["name"]).utf8().get_data() encoding:NSUTF8StringEncoding];
+	PackedByteArray bytes = p_params["data"];
+	NSData *merged = [NSData dataWithBytes:bytes.ptr() length:bytes.size()];
+
+	[[GKLocalPlayer localPlayer] fetchSavedGamesWithCompletionHandler:^(NSArray<GKSavedGame *> *savedGames, NSError *error) {
+		if (error != nil) {
+			Dictionary ret;
+			ret["type"] = "resolve_conflicting_saved_games";
+			ret["result"] = "error";
+			ret["error_code"] = (int64_t)error.code;
+			pending_events.push_back(ret);
+			return;
+		}
+		NSMutableArray<GKSavedGame *> *matching = [NSMutableArray array];
+		for (GKSavedGame *g in savedGames) {
+			if ([g.name isEqualToString:target_name]) {
+				[matching addObject:g];
+			}
+		}
+		[[GKLocalPlayer localPlayer] resolveConflictingSavedGames:matching withData:merged completionHandler:^(NSArray<GKSavedGame *> *resolved, NSError *resolve_err) {
+			Dictionary ret;
+			ret["type"] = "resolve_conflicting_saved_games";
+			if (resolve_err == nil) {
+				ret["result"] = "ok";
+			} else {
+				ret["result"] = "error";
+				ret["error_code"] = (int64_t)resolve_err.code;
+			}
+			pending_events.push_back(ret);
+		}];
+	}];
+	return OK;
+}
 
 GameCenter *GameCenter::get_singleton() {
 	return instance;

@@ -65,6 +65,11 @@ public:
 	Error show_game_center(Dictionary p_params);
 	Error request_identity_verification_signature();
 
+	Error save_game(Dictionary p_params);
+	Error fetch_saved_games();
+	Error load_saved_game(Dictionary p_params);
+	Error resolve_conflicting_saved_games(Dictionary p_params);
+
 	void game_center_closed();
 
 	int get_pending_event_count();
