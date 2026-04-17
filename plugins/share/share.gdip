@@ -1,0 +1,17 @@
+[config]
+name="Share"
+binary="share.xcframework"
+
+initialization="godot_share_init"
+deinitialization="godot_share_deinit"
+
+[dependencies]
+linked=[]
+embedded=[]
+system=[]
+
+capabilities=[]
+
+files=[]
+
+[plist]

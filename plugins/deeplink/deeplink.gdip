@@ -1,0 +1,17 @@
+[config]
+name="DeepLink"
+binary="deeplink.xcframework"
+
+initialization="godot_deeplink_init"
+deinitialization="godot_deeplink_deinit"
+
+[dependencies]
+linked=[]
+embedded=[]
+system=[]
+
+capabilities=[]
+
+files=[]
+
+[plist]
