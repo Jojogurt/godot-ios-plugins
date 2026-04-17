@@ -72,6 +72,7 @@ void GameCenter::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("reset_achievements"), &GameCenter::reset_achievements);
 	ClassDB::bind_method(D_METHOD("request_achievements"), &GameCenter::request_achievements);
 	ClassDB::bind_method(D_METHOD("request_achievement_descriptions"), &GameCenter::request_achievement_descriptions);
+	ClassDB::bind_method(D_METHOD("load_received_challenges"), &GameCenter::load_received_challenges);
 	ClassDB::bind_method(D_METHOD("show_game_center"), &GameCenter::show_game_center);
 	ClassDB::bind_method(D_METHOD("request_identity_verification_signature"), &GameCenter::request_identity_verification_signature);
 
@@ -305,6 +306,34 @@ void GameCenter::reset_achievements() {
 		} else {
 			ret["result"] = "error";
 			ret["error_code"] = (int64_t)error.code;
+		};
+
+		pending_events.push_back(ret);
+	}];
+};
+
+void GameCenter::load_received_challenges() {
+	[GKChallenge loadReceivedChallengesWithCompletionHandler:^(NSArray<GKChallenge *> *challenges, NSError *error) {
+		Dictionary ret;
+		ret["type"] = "challenges";
+		if (error == nil) {
+			int pending = 0;
+			int completed = 0;
+			for (GKChallenge *c in challenges) {
+				if (c.state == GKChallengeStatePending) {
+					pending++;
+				} else if (c.state == GKChallengeStateCompleted) {
+					completed++;
+				}
+			}
+			ret["result"] = "ok";
+			ret["total"] = (int64_t)[challenges count];
+			ret["pending"] = (int64_t)pending;
+			ret["completed"] = (int64_t)completed;
+		} else {
+			ret["result"] = "error";
+			ret["error_code"] = (int64_t)error.code;
+			ret["error_description"] = [error.localizedDescription UTF8String];
 		};
 
 		pending_events.push_back(ret);

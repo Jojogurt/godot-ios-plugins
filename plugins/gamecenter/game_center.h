@@ -61,6 +61,7 @@ public:
 	void reset_achievements();
 	void request_achievements();
 	void request_achievement_descriptions();
+	void load_received_challenges();
 	Error show_game_center(Dictionary p_params);
 	Error request_identity_verification_signature();
 
