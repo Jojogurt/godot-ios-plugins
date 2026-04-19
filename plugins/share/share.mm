@@ -67,9 +67,50 @@ bool SharePlugin::share(String text, String url) {
 		return false;
 	}
 
-	UIViewController *root_controller = [[UIApplication sharedApplication] delegate].window.rootViewController;
+	// Find the active root view controller. iOS 13+ uses UIScene; Godot's
+	// UIApplicationDelegate.window may be nil on scene-based apps, so we walk
+	// connectedScenes first and fall back to the legacy app-delegate window.
+	UIViewController *root_controller = nil;
+	if (@available(iOS 13.0, *)) {
+		for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+			if (scene.activationState != UISceneActivationStateForegroundActive) {
+				continue;
+			}
+			if (![scene isKindOfClass:[UIWindowScene class]]) {
+				continue;
+			}
+			UIWindowScene *windowScene = (UIWindowScene *)scene;
+			for (UIWindow *window in windowScene.windows) {
+				if (window.isKeyWindow) {
+					root_controller = window.rootViewController;
+					break;
+				}
+			}
+			if (root_controller != nil) {
+				break;
+			}
+		}
+	}
 	if (root_controller == nil) {
+		// Fallback: legacy UIApplicationDelegate window (iOS 12 / no-scene apps).
+		root_controller = [[UIApplication sharedApplication] delegate].window.rootViewController;
+	}
+	if (root_controller == nil) {
+		// Last resort — search all windows directly.
+		for (UIWindow *window in [UIApplication sharedApplication].windows) {
+			if (window.isKeyWindow) {
+				root_controller = window.rootViewController;
+				break;
+			}
+		}
+	}
+	if (root_controller == nil) {
+		NSLog(@"[Share] Could not find a root view controller to present from");
 		return false;
+	}
+	// If a VC is already presented modally, present on top of it.
+	while (root_controller.presentedViewController != nil) {
+		root_controller = root_controller.presentedViewController;
 	}
 
 	UIActivityViewController *vc = [[UIActivityViewController alloc] initWithActivityItems:items applicationActivities:nil];

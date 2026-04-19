@@ -52,10 +52,15 @@ void DeepLinkPlugin::_set_initial(String url, String source) {
 	initial_source = source;
 }
 
+extern "C" void deeplink_drain_pending_to_singleton(void);
+
 DeepLinkPlugin::DeepLinkPlugin() {
 	singleton = this;
 	// Touch the delegate so its +load / static initializer runs and registers with GDTApplicationDelegate.
 	(void)[GodotDeepLinkAppDelegate shared];
+	// Drain any URL captured before Godot engine init (e.g. cold-launch Universal
+	// Link picked up by scene:willConnectToSession:options:).
+	deeplink_drain_pending_to_singleton();
 }
 
 DeepLinkPlugin::~DeepLinkPlugin() {
