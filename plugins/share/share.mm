@@ -28,6 +28,7 @@ SharePlugin *SharePlugin::get_singleton() {
 
 void SharePlugin::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("share", "text", "url"), &SharePlugin::share);
+	ClassDB::bind_method(D_METHOD("share_image", "text", "url", "image_path"), &SharePlugin::share_image);
 	ClassDB::bind_method(D_METHOD("is_available"), &SharePlugin::is_available);
 
 	// result: "ok" (user completed a share), "cancelled" (dismissed), "error" (presentation failed).
@@ -43,12 +44,7 @@ bool SharePlugin::is_available() {
 	return NSClassFromString(@"UIActivityViewController") != nil;
 }
 
-bool SharePlugin::share(String text, String url) {
-	if (!is_available()) {
-		return false;
-	}
-
-	NSMutableArray *items = [NSMutableArray array];
+static void add_text_and_url(NSMutableArray *items, const String &text, const String &url) {
 	NSString *text_ns = godot_string_to_ns(text);
 	if (text_ns != nil) {
 		[items addObject:text_ns];
@@ -63,7 +59,38 @@ bool SharePlugin::share(String text, String url) {
 			[items addObject:url_ns];
 		}
 	}
-	if (items.count == 0) {
+}
+
+bool SharePlugin::share(String text, String url) {
+	if (!is_available()) {
+		return false;
+	}
+	NSMutableArray *items = [NSMutableArray array];
+	add_text_and_url(items, text, url);
+	return present_items((__bridge void *)items);
+}
+
+bool SharePlugin::share_image(String text, String url, String image_path) {
+	if (!is_available()) {
+		return false;
+	}
+	NSMutableArray *items = [NSMutableArray array];
+	NSString *path_ns = godot_string_to_ns(image_path);
+	if (path_ns != nil) {
+		UIImage *image = [UIImage imageWithContentsOfFile:path_ns];
+		if (image != nil) {
+			[items addObject:image];
+		} else {
+			NSLog(@"[Share] Could not load image at %@ - sharing text + URL", path_ns);
+		}
+	}
+	add_text_and_url(items, text, url);
+	return present_items((__bridge void *)items);
+}
+
+bool SharePlugin::present_items(void *items_ptr) {
+	NSArray *items = (__bridge NSArray *)items_ptr;
+	if (items == nil || items.count == 0) {
 		return false;
 	}
 
