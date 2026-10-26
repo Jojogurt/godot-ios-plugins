@@ -1,0 +1,17 @@
+[config]
+name="Accessibility"
+binary="accessibility.xcframework"
+
+initialization="godot_accessibility_init"
+deinitialization="godot_accessibility_deinit"
+
+[dependencies]
+linked=[]
+embedded=[]
+system=[]
+
+capabilities=[]
+
+files=[]
+
+[plist]
